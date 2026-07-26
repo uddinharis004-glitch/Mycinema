@@ -451,22 +451,17 @@ export default function CineVault() {
   const [search, setSearch] = useState("");
 
   // Auth state
-  const [isAuthed, setIsAuthed] = useState(false);
-  const [showPasscode, setShowPasscode] = useState(false);
-  const [pendingAction, setPendingAction] = useState(null);
+const [isAuthed, setIsAuthed] = useState(false); // not used for session, always asks
+const [showPasscode, setShowPasscode] = useState(false);
+const [pendingAction, setPendingAction] = useState(null);
 
   // Require passcode before running an action
   const requireAuth = useCallback((action) => {
-    if (isAuthed) {
-      action();
-    } else {
-      setPendingAction(() => action);
-      setShowPasscode(true);
-    }
-  }, [isAuthed]);
+    setPendingAction(() => action);
+    setShowPasscode(true);
+  }, []);
 
-  const onPasscodeSuccess = () => {
-    setIsAuthed(true);
+ const onPasscodeSuccess = () => {
     setShowPasscode(false);
     if (pendingAction) {
       pendingAction();
