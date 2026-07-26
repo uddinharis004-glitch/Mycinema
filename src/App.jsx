@@ -90,6 +90,9 @@ const fmtDate = (d) =>
 function Player({ video, onClose }) {
   const videoRef = useRef();
   const playerRef = useRef();
+  const [audioTracks, setAudioTracks] = useState([]);
+  const [activeTrack, setActiveTrack] = useState(0);
+  const [showAudioMenu, setShowAudioMenu] = useState(false);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -104,34 +107,101 @@ function Player({ video, onClose }) {
       tooltips: { controls: true, seek: true },
       resetOnEnd: false,
     });
-    return () => playerRef.current?.destroy();
+
+    const vid = videoRef.current;
+    const checkTracks = () => {
+      if (vid.audioTracks && vid.audioTracks.length > 0) {
+        const tracks = Array.from(vid.audioTracks).map((t, i) => ({
+          id: i,
+          label: t.label || t.language || `Track ${i + 1}`,
+        }));
+        setAudioTracks(tracks);
+      }
+    };
+    vid.addEventListener("loadedmetadata", checkTracks);
+    vid.addEventListener("canplay", checkTracks);
+
+    return () => {
+      playerRef.current?.destroy();
+      vid.removeEventListener("loadedmetadata", checkTracks);
+      vid.removeEventListener("canplay", checkTracks);
+    };
   }, []);
 
+  const switchTrack = (index) => {
+    const vid = videoRef.current;
+    if (!vid?.audioTracks) return;
+    for (let i = 0; i < vid.audioTracks.length; i++) {
+      vid.audioTracks[i].enabled = i === index;
+    }
+    setActiveTrack(index);
+    setShowAudioMenu(false);
+  };
+
   useEffect(() => {
-    const h = (e) => { if (e.key === "Escape") onClose(); };
+    const h = (e) => {
+      if (e.key === "Escape") {
+        if (showAudioMenu) setShowAudioMenu(false);
+        else onClose();
+      }
+    };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [onClose]);
+  }, [onClose, showAudioMenu]);
 
   return (
     <div
-      onClick={onClose}
+      onClick={() => { if (showAudioMenu) setShowAudioMenu(false); else onClose(); }}
       style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.97)", zIndex:1000, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:20 }}
     >
       <div style={{ width:"100%", maxWidth:980 }} onClick={(e) => e.stopPropagation()}>
+
         {/* Title bar */}
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
-          <div>
-            <div style={{ fontSize:18, fontWeight:700, color:"#F5F5F5" }}>{video.title}</div>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14, gap:12 }}>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:18, fontWeight:700, color:"#F5F5F5", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{video.title}</div>
             <div style={{ fontSize:11, color:"#6B7280", marginTop:3 }}>
               {fmtSize(video.size)}{video.uploadedAt ? ` · ${fmtDate(video.uploadedAt)}` : ""}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{ background:"rgba(255,255,255,.1)", border:"1px solid rgba(255,255,255,.2)", color:"#fff", width:36, height:36, borderRadius:"50%", cursor:"pointer", fontSize:16, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"inherit" }}
-          >✕</button>
+
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+            {/* Audio track selector — only shows when file has multiple tracks */}
+            {audioTracks.length > 1 && (
+              <div style={{ position:"relative" }}>
+                <button
+                  onClick={() => setShowAudioMenu(!showAudioMenu)}
+                  style={{ background: showAudioMenu ? "rgba(245,158,11,.2)" : "rgba(255,255,255,.1)", border:`1px solid ${showAudioMenu ? "rgba(245,158,11,.5)" : "rgba(255,255,255,.2)"}`, color: showAudioMenu ? "#F59E0B" : "#fff", padding:"7px 14px", borderRadius:8, cursor:"pointer", fontSize:13, fontWeight:600, fontFamily:"inherit", display:"flex", alignItems:"center", gap:6 }}
+                >
+                  🎵 {audioTracks[activeTrack]?.label || `Track ${activeTrack + 1}`}
+                </button>
+
+                {showAudioMenu && (
+                  <div style={{ position:"absolute", right:0, top:"calc(100% + 8px)", background:"#1B1D28", border:"1px solid rgba(255,255,255,.12)", borderRadius:10, overflow:"hidden", minWidth:180, zIndex:100, boxShadow:"0 8px 32px rgba(0,0,0,.7)" }}>
+                    <div style={{ padding:"8px 14px 6px", fontSize:11, color:"#6B7280", fontWeight:600, letterSpacing:".5px" }}>AUDIO TRACK</div>
+                    {audioTracks.map((track, i) => (
+                      <button
+                        key={i}
+                        onClick={() => switchTrack(i)}
+                        style={{ display:"flex", alignItems:"center", gap:10, width:"100%", padding:"10px 16px", background: activeTrack===i ? "rgba(245,158,11,.12)" : "transparent", border:"none", borderBottom: i < audioTracks.length-1 ? "1px solid rgba(255,255,255,.06)" : "none", color: activeTrack===i ? "#F59E0B" : "#E8EAF2", fontSize:13, cursor:"pointer", fontFamily:"inherit", textAlign:"left" }}
+                      >
+                        <span style={{ fontSize:8, color: activeTrack===i ? "#F59E0B" : "transparent" }}>●</span>
+                        {track.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Close button */}
+            <button
+              onClick={onClose}
+              style={{ background:"rgba(255,255,255,.1)", border:"1px solid rgba(255,255,255,.2)", color:"#fff", width:36, height:36, borderRadius:"50%", cursor:"pointer", fontSize:16, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"inherit" }}
+            >✕</button>
+          </div>
         </div>
+
         {/* Plyr video */}
         <video ref={videoRef} poster={video.thumbnail || ""} playsInline crossOrigin="anonymous">
           <source src={video.url} />
