@@ -154,6 +154,88 @@ const fmtDate = (d) =>
   new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
 /* ═══════════════════════════════════════════════════════
+   PLAYER PICKER MODAL
+═══════════════════════════════════════════════════════ */
+function PlayerPicker({ video, onPlayInBrowser, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const isAndroid = /android/i.test(navigator.userAgent);
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+  const url = video.url;
+  const encoded = encodeURIComponent(url);
+
+  const intentUrl = (pkg) => {
+    try {
+      const u = new URL(url);
+      return `intent://${u.host}${u.pathname}#Intent;scheme=https;package=${pkg};type=video/mp4;end`;
+    } catch { return url; }
+  };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { prompt("Copy this link:", url); }
+  };
+
+  const download = () => {
+    const a = document.createElement("a");
+    a.href = url; a.download = video.title; a.target = "_blank"; a.click();
+  };
+
+  const options = [
+    { icon:"▶", label:"Play in Browser", sub:"Plyr player — works for MP4", color:"#F59E0B", action:() => { onPlayInBrowser(video); onClose(); }, show:true },
+    { icon:"🟠", label:"Open in VLC", sub: isAndroid ? "VLC for Android — MKV + dual audio + subtitles" : isIOS ? "VLC for iOS — MKV support" : "Desktop VLC — full MKV support", color:"#FF7700", action:() => { window.location.href = `vlc://${url}`; }, show:true },
+    { icon:"🎬", label:"Open in MX Player", sub:"MX Player — MKV + dual audio + subtitles", color:"#E91E63", action:() => { window.location.href = intentUrl("com.mxtech.videoplayer.ad"); }, show:isAndroid },
+    { icon:"🎬", label:"Open in MX Player Pro", sub:"MX Player Pro for Android", color:"#C2185B", action:() => { window.location.href = intentUrl("com.mxtech.videoplayer.pro"); }, show:isAndroid },
+    { icon:"▶", label:"Open in Just Player", sub:"Just Player — lightweight MKV player", color:"#7C3AED", action:() => { window.location.href = intentUrl("com.brouken.player"); }, show:isAndroid },
+    { icon:"🔥", label:"Open in Infuse", sub:"Infuse — MKV + subtitles on iOS/Apple TV", color:"#3B82F6", action:() => { window.location.href = `infuse://x-callback-url/play?url=${encoded}`; }, show:isIOS },
+    { icon:"▶", label:"Open in nPlayer", sub:"nPlayer — MKV + subtitles on iOS", color:"#06B6D4", action:() => { window.location.href = `nplayer-${url}`; }, show:isIOS },
+    { icon: copied ? "✅" : "📋", label: copied ? "Copied!" : "Copy Video Link", sub:"Paste into any player app", color:"#10B981", action:copyLink, show:true },
+    { icon:"⬇", label:"Download", sub:"Save file to your device", color:"#6366F1", action:download, show:true },
+  ].filter((o) => o.show);
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.88)", zIndex:1500, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background:"#12141B", border:"1px solid rgba(255,255,255,.1)", borderRadius:18, width:"100%", maxWidth:420, overflow:"hidden", boxShadow:"0 24px 64px rgba(0,0,0,.8)" }}>
+        <div style={{ padding:"20px 22px 14px", borderBottom:"1px solid rgba(255,255,255,.07)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:15, fontWeight:700, color:"#F5F5F5", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{video.title}</div>
+              <div style={{ fontSize:12, color:"#6B7280", marginTop:4 }}>Choose how to play</div>
+            </div>
+            <button onClick={onClose} style={{ background:"rgba(255,255,255,.08)", border:"1px solid rgba(255,255,255,.12)", color:"#9CA3AF", width:30, height:30, borderRadius:"50%", cursor:"pointer", fontSize:14, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginLeft:12, fontFamily:"inherit" }}>✕</button>
+          </div>
+        </div>
+        <div style={{ padding:"10px 22px", borderBottom:"1px solid rgba(255,255,255,.05)", background:"rgba(255,255,255,.02)" }}>
+          <span style={{ fontSize:11, color:"#6B7280" }}>{isAndroid ? "📱 Android detected" : isIOS ? "📱 iOS detected" : "💻 Desktop detected"} — showing compatible players</span>
+        </div>
+        <div style={{ padding:"8px 0" }}>
+          {options.map((opt, i) => (
+            <button key={i} onClick={opt.action}
+              style={{ width:"100%", display:"flex", alignItems:"center", gap:14, padding:"13px 22px", background:"transparent", border:"none", borderBottom: i < options.length-1 ? "1px solid rgba(255,255,255,.04)" : "none", cursor:"pointer", textAlign:"left", fontFamily:"inherit" }}
+              onMouseEnter={(e) => e.currentTarget.style.background="rgba(255,255,255,.04)"}
+              onMouseLeave={(e) => e.currentTarget.style.background="transparent"}
+            >
+              <div style={{ width:38, height:38, borderRadius:10, background:`${opt.color}22`, border:`1px solid ${opt.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>{opt.icon}</div>
+              <div style={{ minWidth:0 }}>
+                <div style={{ fontSize:14, fontWeight:600, color:"#E8EAF2" }}>{opt.label}</div>
+                <div style={{ fontSize:11, color:"#6B7280", marginTop:2 }}>{opt.sub}</div>
+              </div>
+              <div style={{ marginLeft:"auto", color:"#4B5563", fontSize:14, flexShrink:0 }}>›</div>
+            </button>
+          ))}
+        </div>
+        <div style={{ padding:"12px 22px", borderTop:"1px solid rgba(255,255,255,.06)", background:"rgba(245,158,11,.04)" }}>
+          <div style={{ fontSize:11, color:"#9CA3AF", lineHeight:1.6 }}>💡 <strong style={{ color:"#F59E0B" }}>MKV tip:</strong> Use VLC or MX Player for full MKV support — dual audio, subtitles, all formats.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    PLYR VIDEO PLAYER
 ═══════════════════════════════════════════════════════ */
 function Player({ video, onClose }) {
@@ -448,20 +530,26 @@ export default function CineVault() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [playing, setPlaying] = useState(null);
+  const [pickerVideo, setPickerVideo] = useState(null);
   const [search, setSearch] = useState("");
 
   // Auth state
-const [isAuthed, setIsAuthed] = useState(false); // not used for session, always asks
-const [showPasscode, setShowPasscode] = useState(false);
-const [pendingAction, setPendingAction] = useState(null);
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [showPasscode, setShowPasscode] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null);
 
   // Require passcode before running an action
   const requireAuth = useCallback((action) => {
-    setPendingAction(() => action);
-    setShowPasscode(true);
-  }, []);
+    if (isAuthed) {
+      action();
+    } else {
+      setPendingAction(() => action);
+      setShowPasscode(true);
+    }
+  }, [isAuthed]);
 
- const onPasscodeSuccess = () => {
+  const onPasscodeSuccess = () => {
+    setIsAuthed(true);
     setShowPasscode(false);
     if (pendingAction) {
       pendingAction();
@@ -598,7 +686,7 @@ const [pendingAction, setPendingAction] = useState(null);
                   <VideoCard
                     key={v.id}
                     video={v}
-                    onPlay={setPlaying}
+                    onPlay={setPickerVideo}
                     onDelete={(video, showConfirm) => handleDeleteRequest(video, showConfirm)}
                     onConfirmedDelete={handleDelete}
                   />
@@ -626,6 +714,13 @@ const [pendingAction, setPendingAction] = useState(null);
         )}
       </main>
 
+      {pickerVideo && (
+        <PlayerPicker
+          video={pickerVideo}
+          onPlayInBrowser={setPlaying}
+          onClose={() => setPickerVideo(null)}
+        />
+      )}
       {playing && <Player video={playing} onClose={() => setPlaying(null)} />}
     </div>
   );
