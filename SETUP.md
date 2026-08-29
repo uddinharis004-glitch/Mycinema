@@ -59,9 +59,10 @@ In Vercel → your project → **Settings → Environment Variables** → add th
 | `R2_PUBLIC_URL` | `https://pub-abc123.r2.dev` (from Step 1) |
 | `R2_STORAGE_LIMIT_GB` | `10` (the allowance the app should enforce) |
 | `APP_PASSCODE` | your private app passcode |
-| `VITE_PASSCODE` | the same app passcode |
 
 After saving → **Deployments → Redeploy**
+
+Keep the passcode only in `APP_PASSCODE`. Do not create a `VITE_PASSCODE`; variables with the `VITE_` prefix are included in browser code.
 
 ---
 

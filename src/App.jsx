@@ -3,30 +3,30 @@ import Plyr from "plyr";
 import "plyr/dist/plyr.css";
 
 /* ═══════════════════════════════════════════════════════
-   PASSCODE — change VITE_PASSCODE in Vercel env vars
-   or it defaults to 7989
-═══════════════════════════════════════════════════════ */
-const PASSCODE = import.meta.env.VITE_PASSCODE || "7989";
-
-/* ═══════════════════════════════════════════════════════
    PASSCODE MODAL
 ═══════════════════════════════════════════════════════ */
 function PasscodeModal({ onSuccess, onCancel }) {
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const [shake, setShake] = useState(false);
+  const [checking, setChecking] = useState(false);
   const inputRef = useRef();
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  const check = () => {
-    if (code === PASSCODE) {
+  const check = async () => {
+    if (!code || checking) return;
+    setChecking(true);
+    try {
+      await api.verifyPasscode(code);
       onSuccess(code);
-    } else {
+    } catch {
       setError(true);
       setShake(true);
       setCode("");
       setTimeout(() => { setError(false); setShake(false); }, 1000);
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -68,8 +68,9 @@ function PasscodeModal({ onSuccess, onCancel }) {
           >Cancel</button>
           <button
             onClick={check}
-            style={{ flex:1, background:"linear-gradient(135deg,#F59E0B,#EF4444)", border:"none", color:"#000", fontWeight:700, padding:"11px", borderRadius:9, cursor:"pointer", fontSize:14, fontFamily:"inherit" }}
-          >Unlock</button>
+            disabled={checking || !code}
+            style={{ flex:1, background:"linear-gradient(135deg,#F59E0B,#EF4444)", border:"none", color:"#000", fontWeight:700, padding:"11px", borderRadius:9, cursor:checking?"wait":"pointer", fontSize:14, fontFamily:"inherit", opacity:(checking || !code) ? .7 : 1 }}
+          >{checking ? "Checking…" : "Unlock"}</button>
         </div>
       </div>
     </div>
@@ -80,6 +81,16 @@ function PasscodeModal({ onSuccess, onCancel }) {
    API CALLS
 ═══════════════════════════════════════════════════════ */
 const api = {
+  async verifyPasscode(passcode) {
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ passcode }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Wrong passcode");
+    return true;
+  },
   async listVideos() {
     const res = await fetch("/api/videos");
     const data = await res.json();
