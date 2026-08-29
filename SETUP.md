@@ -48,7 +48,7 @@ Top-right of any Cloudflare page → your account → copy the **Account ID**
 
 ## Step 4 — Add to Vercel Environment Variables
 
-In Vercel → your project → **Settings → Environment Variables** → add all 5:
+In Vercel → your project → **Settings → Environment Variables** → add these values:
 
 | Name | Value |
 |------|-------|
@@ -57,6 +57,9 @@ In Vercel → your project → **Settings → Environment Variables** → add al
 | `R2_SECRET_ACCESS_KEY` | from Step 2 |
 | `R2_BUCKET_NAME` | `cinevault` |
 | `R2_PUBLIC_URL` | `https://pub-abc123.r2.dev` (from Step 1) |
+| `R2_STORAGE_LIMIT_GB` | `10` (the allowance the app should enforce) |
+| `APP_PASSCODE` | your private app passcode |
+| `VITE_PASSCODE` | the same app passcode |
 
 After saving → **Deployments → Redeploy**
 
@@ -76,10 +79,28 @@ Browser → `/api/upload-url` (Vercel) → gets a signed URL → uploads directl
 The video **never passes through Vercel**, so there's no file size limit.
 Uploads go straight from your browser to Cloudflare R2.
 
-## Free tier limits (R2)
+## Storage allowance shown by CineVault
 
-- 10 GB storage
-- 1 million writes/month  
-- 10 million reads/month
+CineVault totals every object in your R2 bucket and compares it with `R2_STORAGE_LIMIT_GB`.
+The default is 10 GB. This is an app-enforced allowance, not a hard Cloudflare bucket limit.
+If you intentionally want to use paid storage, increase this environment variable and redeploy.
+
+---
+
+## Mini-PC MKV processor
+
+The processor uses an outbound connection to R2, so you do not need to open a router port or expose your PC to the internet.
+
+1. Install Node.js and FFmpeg on the mini PC. In Command Prompt, `ffmpeg -version` and `ffprobe -version` should both work.
+2. Copy `.env.processor.example` to a new file named `.env.processor`.
+3. Add the same four R2 account, access-key, secret-key, and bucket values used in Vercel.
+4. Run `npm install` once, or let the launcher install dependencies if needed.
+5. Double-click `Start CineVault Processor.cmd`.
+6. The local control page opens at `http://127.0.0.1:4782`. It starts in **OFF** mode every time.
+7. Queue any existing MKV from the CineVault website, then click **Start** locally when you want the mini PC to process jobs.
+
+**Pause** finishes the current conversion and does not start another one. **Stop** cancels the current conversion and returns it to the queue. The original MKV is never deleted automatically.
+
+The MP4 keeps all audio tracks and supported text subtitle tracks. Image-based subtitles such as PGS cannot be stored inside MP4, so those are skipped and remain available in the original MKV.
 
 More than enough for a personal streaming site.

@@ -21,7 +21,7 @@ function PasscodeModal({ onSuccess, onCancel }) {
 
   const check = () => {
     if (code === PASSCODE) {
-      onSuccess();
+      onSuccess(code);
     } else {
       setError(true);
       setShake(true);
@@ -41,7 +41,7 @@ function PasscodeModal({ onSuccess, onCancel }) {
       >
         <div style={{ fontSize:38, marginBottom:14 }}>🔒</div>
         <div style={{ fontSize:17, fontWeight:700, color:"#F5F5F5", marginBottom:6 }}>Enter Passcode</div>
-        <div style={{ fontSize:13, color:"#6B7280", marginBottom:22 }}>Required to upload or delete videos</div>
+        <div style={{ fontSize:13, color:"#6B7280", marginBottom:22 }}>Required to upload, convert, or delete videos</div>
 
         <input
           ref={inputRef}
@@ -86,23 +86,46 @@ const api = {
     if (!res.ok) throw new Error(data.error || "Failed to load videos");
     return data.videos || [];
   },
-  async getUploadUrl(filename, contentType) {
+  async getUploadUrl(filename, contentType, size, passcode) {
     const res = await fetch("/api/upload-url", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, contentType }),
+      headers: { "Content-Type": "application/json", "X-CineVault-Passcode": passcode },
+      body: JSON.stringify({ filename, contentType, size }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to get upload URL");
     return data;
   },
-  async deleteVideo(key) {
+  async deleteVideo(key, passcode) {
     const res = await fetch("/api/delete", {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-CineVault-Passcode": passcode },
       body: JSON.stringify({ key }),
     });
-    if (!res.ok) throw new Error("Failed to delete");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to delete");
+  },
+  async getStorage() {
+    const res = await fetch("/api/storage");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load storage usage");
+    return data;
+  },
+  async getConversions() {
+    const res = await fetch("/api/conversions");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load conversion queue");
+    return data;
+  },
+  async requestConversion(sourceKey, passcode) {
+    const res = await fetch("/api/conversions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CineVault-Passcode": passcode },
+      body: JSON.stringify({ sourceKey }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to queue conversion");
+    return data.job;
   },
 };
 
@@ -145,7 +168,7 @@ async function generateThumbnailBlob(file) {
 }
 
 const fmtSize = (b) => {
-  if (!b) return "";
+  if (!b) return "0 B";
   if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
   if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
   return `${(b / 1e3).toFixed(0)} KB`;
@@ -345,12 +368,67 @@ function Player({ video, onClose }) {
 }
 
 /* ═══════════════════════════════════════════════════════
+   STORAGE & PROCESSOR STATUS
+═══════════════════════════════════════════════════════ */
+function SystemStatus({ storage, processor, jobs }) {
+  const processorLabel = !processor?.online
+    ? "Offline"
+    : processor.state === "running"
+      ? "Running"
+      : processor.state === "paused"
+        ? "Paused"
+        : "Off";
+  const processorColor = processor?.online && processor.state === "running" ? "#10B981" : processor?.online ? "#F59E0B" : "#6B7280";
+  const queued = jobs.filter((job) => job.status === "queued").length;
+  const processing = jobs.find((job) => job.status === "processing");
+
+  return (
+    <div className="status-grid" style={{ display:"grid", gridTemplateColumns:"minmax(0,1.4fr) minmax(0,1fr)", gap:16, marginBottom:24 }}>
+      <div style={{ background:"#12141B", border:"1px solid rgba(255,255,255,.08)", borderRadius:14, padding:"16px 18px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:10 }}>
+          <div>
+            <div style={{ fontSize:12, color:"#9CA3AF", fontWeight:700, letterSpacing:".4px" }}>R2 STORAGE</div>
+            <div style={{ fontSize:13, color:"#6B7280", marginTop:4 }}>{storage ? `${storage.objectCount} stored files` : "Checking usage…"}</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ color:"#F5F5F5", fontWeight:700 }}>{storage ? `${fmtSize(storage.usedBytes)} used` : "—"}</div>
+            <div style={{ color:"#6B7280", fontSize:12, marginTop:3 }}>{storage ? `${fmtSize(storage.remainingBytes)} available` : ""}</div>
+          </div>
+        </div>
+        <div style={{ height:8, background:"rgba(255,255,255,.07)", borderRadius:8, overflow:"hidden" }}>
+          <div style={{ height:"100%", width:`${storage?.percentUsed || 0}%`, background:(storage?.percentUsed || 0) > 85 ? "#EF4444" : "linear-gradient(90deg,#F59E0B,#EF4444)", borderRadius:8 }} />
+        </div>
+        <div style={{ color:"#4B5563", fontSize:11, marginTop:8 }}>App allowance: {storage ? fmtSize(storage.limitBytes) : "10 GB"}. R2 itself can continue with paid storage.</div>
+      </div>
+
+      <div style={{ background:"#12141B", border:"1px solid rgba(255,255,255,.08)", borderRadius:14, padding:"16px 18px" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 }}>
+          <div>
+            <div style={{ fontSize:12, color:"#9CA3AF", fontWeight:700, letterSpacing:".4px" }}>MINI-PC PROCESSOR</div>
+            <div style={{ display:"flex", alignItems:"center", gap:7, marginTop:7 }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", background:processorColor, boxShadow:`0 0 10px ${processorColor}` }} />
+              <span style={{ color:"#F5F5F5", fontSize:14, fontWeight:700 }}>{processorLabel}</span>
+            </div>
+          </div>
+          <div style={{ textAlign:"right", color:"#9CA3AF", fontSize:12 }}>
+            <div>{queued} queued</div>
+            {processing && <div style={{ color:"#F59E0B", marginTop:4 }}>{Math.round(processing.progress || 0)}% converting</div>}
+          </div>
+        </div>
+        <div style={{ color:"#4B5563", fontSize:11, marginTop:14 }}>Start or pause processing only from the control page on your mini PC.</div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════
    VIDEO CARD
 ═══════════════════════════════════════════════════════ */
-function VideoCard({ video, onPlay, onDelete, onConfirmedDelete }) {
+function VideoCard({ video, conversion, onPlay, onDelete, onConfirmedDelete, onConvert }) {
   const [hovered, setHovered] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [queueing, setQueueing] = useState(false);
 
   const handleDelete = async (e) => {
     e.stopPropagation();
@@ -358,6 +436,23 @@ function VideoCard({ video, onPlay, onDelete, onConfirmedDelete }) {
     await onConfirmedDelete(video);
     setDeleting(false);
   };
+
+  const handleConvert = async (event) => {
+    event.stopPropagation();
+    setQueueing(true);
+    try { await onConvert(video); }
+    finally { setQueueing(false); }
+  };
+
+  const conversionText = video.convertedKey
+    ? "MP4 ready"
+    : conversion?.status === "processing"
+      ? `Converting ${Math.round(conversion.progress || 0)}%`
+      : conversion?.status === "queued"
+        ? "Queued for your PC"
+        : conversion?.status === "failed"
+          ? "Conversion failed — retry"
+          : null;
 
   return (
     <div
@@ -376,6 +471,22 @@ function VideoCard({ video, onPlay, onDelete, onConfirmedDelete }) {
       </div>
       <div style={{ padding:"12px 14px" }}>
         <div title={video.title} style={{ fontSize:14, fontWeight:600, color:"#E8EAF2", marginBottom:6, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{video.title}</div>
+        {video.extension === "mkv" && (
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:9 }}>
+            <span style={{ fontSize:10, fontWeight:700, color:"#F59E0B", background:"rgba(245,158,11,.1)", border:"1px solid rgba(245,158,11,.25)", borderRadius:5, padding:"2px 6px" }}>MKV</span>
+            {conversionText
+              ? <span style={{ fontSize:11, color:conversion?.status === "failed" ? "#EF4444" : "#9CA3AF" }}>{conversionText}</span>
+              : <button onClick={handleConvert} disabled={queueing}
+                  style={{ background:"rgba(245,158,11,.12)", border:"1px solid rgba(245,158,11,.35)", color:"#F59E0B", fontSize:11, fontWeight:700, padding:"4px 9px", borderRadius:6, cursor:queueing?"wait":"pointer" }}>
+                  {queueing ? "Queueing…" : "Convert to MP4"}
+                </button>
+            }
+            {conversion?.status === "failed" && (
+              <button onClick={handleConvert} disabled={queueing}
+                style={{ background:"rgba(239,68,68,.12)", border:"1px solid rgba(239,68,68,.35)", color:"#EF4444", fontSize:11, padding:"3px 8px", borderRadius:6, cursor:"pointer" }}>Retry</button>
+            )}
+          </div>
+        )}
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", fontSize:11, color:"#6B7280" }}>
           <span>{fmtSize(video.size)}{video.uploadedAt ? ` · ${fmtDate(video.uploadedAt)}` : ""}</span>
           {confirmDel
@@ -404,7 +515,7 @@ function VideoCard({ video, onPlay, onDelete, onConfirmedDelete }) {
 /* ═══════════════════════════════════════════════════════
    UPLOAD PANEL
 ═══════════════════════════════════════════════════════ */
-function UploadPanel({ onDone }) {
+function UploadPanel({ onDone, passcode, storage }) {
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState("");
   const [thumbPreview, setThumbPreview] = useState(null);
@@ -420,13 +531,16 @@ function UploadPanel({ onDone }) {
     if (!/\.(mp4|mkv|avi|mov|webm|wmv|m4v|flv)$/i.test(f.name) && !f.type.startsWith("video/")) {
       setError("Please select a video file (MP4, MKV, MOV, AVI, WebM…)"); return;
     }
+    if (storage && f.size > storage.remainingBytes) {
+      setError(`This file is ${fmtSize(f.size)}, but only ${fmtSize(storage.remainingBytes)} remains in your app allowance.`); return;
+    }
     setError(null); setFile(f);
     setTitle(f.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " "));
     setPhase("generating");
     const blob = await generateThumbnailBlob(f);
     if (blob) { setThumbBlob(blob); setThumbPreview(URL.createObjectURL(blob)); }
     setPhase("");
-  }, []);
+  }, [storage]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault(); setDragging(false);
@@ -442,11 +556,11 @@ function UploadPanel({ onDone }) {
       const safeTitle = title.trim().replace(/[^a-zA-Z0-9 ._-]/g, "").replace(/ /g, "-");
       const filename = `${safeTitle}.${ext}`;
       setPhase("video");
-      const { url: videoUrl } = await api.getUploadUrl(filename, file.type || "video/mp4");
+      const { url: videoUrl } = await api.getUploadUrl(filename, file.type || "video/mp4", file.size, passcode);
       await uploadToR2(videoUrl, file, setProgress);
       if (thumbBlob) {
         setPhase("thumb"); setProgress(0);
-        const { url: thumbUrl } = await api.getUploadUrl(filename.replace(/\.[^.]+$/, ".jpg"), "image/jpeg");
+        const { url: thumbUrl } = await api.getUploadUrl(filename.replace(/\.[^.]+$/, ".jpg"), "image/jpeg", thumbBlob.size, passcode);
         await uploadToR2(thumbUrl, thumbBlob, setProgress);
       }
       setPhase("done");
@@ -472,6 +586,7 @@ function UploadPanel({ onDone }) {
           <div style={{ fontSize:14, color:"#6B7280", lineHeight:1.8, marginBottom:28 }}>
             Drag & drop or click to browse<br/>MP4, MKV, MOV, AVI, WebM · Uploads directly to <strong style={{ color:"#9CA3AF" }}>Cloudflare R2</strong>
           </div>
+          {storage && <div style={{ fontSize:12, color:"#9CA3AF", marginBottom:18 }}>{fmtSize(storage.remainingBytes)} available in your app allowance</div>}
           <button onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}
             style={{ background:"linear-gradient(135deg,#F59E0B,#EF4444)", border:"none", color:"#000", fontWeight:700, padding:"10px 28px", borderRadius:9, cursor:"pointer", fontSize:14, fontFamily:"inherit" }}>Browse Files</button>
           {error && <div style={{ marginTop:16, fontSize:13, color:"#EF4444" }}>⚠️ {error}</div>}
@@ -532,27 +647,33 @@ export default function CineVault() {
   const [playing, setPlaying] = useState(null);
   const [pickerVideo, setPickerVideo] = useState(null);
   const [search, setSearch] = useState("");
+  const [storage, setStorage] = useState(null);
+  const [conversions, setConversions] = useState([]);
+  const [processor, setProcessor] = useState({ state:"offline", online:false });
+  const [notice, setNotice] = useState(null);
 
   // Auth state
   const [isAuthed, setIsAuthed] = useState(false);
+  const [authCode, setAuthCode] = useState("");
   const [showPasscode, setShowPasscode] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
 
   // Require passcode before running an action
   const requireAuth = useCallback((action) => {
     if (isAuthed) {
-      action();
+      return action(authCode);
     } else {
       setPendingAction(() => action);
       setShowPasscode(true);
     }
-  }, [isAuthed]);
+  }, [isAuthed, authCode]);
 
-  const onPasscodeSuccess = () => {
+  const onPasscodeSuccess = (code) => {
     setIsAuthed(true);
+    setAuthCode(code);
     setShowPasscode(false);
     if (pendingAction) {
-      pendingAction();
+      pendingAction(code);
       setPendingAction(null);
     }
   };
@@ -565,13 +686,33 @@ export default function CineVault() {
   const loadVideos = useCallback(async () => {
     setLoading(true); setLoadError(null);
     try {
-      const vids = await api.listVideos();
+      const [vids, storageData, conversionData] = await Promise.all([
+        api.listVideos(), api.getStorage(), api.getConversions(),
+      ]);
       setVideos(vids);
+      setStorage(storageData);
+      setConversions(conversionData.jobs || []);
+      setProcessor(conversionData.processor || { state:"offline", online:false });
     } catch (e) { setLoadError(e.message); }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { loadVideos(); }, [loadVideos]);
+
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const conversionData = await api.getConversions();
+        setConversions(conversionData.jobs || []);
+        setProcessor(conversionData.processor || { state:"offline", online:false });
+        if (conversionData.jobs?.some((job) => job.status === "completed")) {
+          const vids = await api.listVideos();
+          setVideos(vids);
+        }
+      } catch { /* the normal page refresh still shows connection errors */ }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Delete handler — first arg is video, second is a callback to show confirm
   const handleDeleteRequest = (video, showConfirm) => {
@@ -580,15 +721,33 @@ export default function CineVault() {
 
   const handleDelete = async (video) => {
     try {
-      await api.deleteVideo(video.key);
+      await api.deleteVideo(video.key, authCode);
       const thumbKey = video.key.replace(/\.[^.]+$/, ".jpg");
-      await api.deleteVideo(thumbKey).catch(() => {});
+      await api.deleteVideo(thumbKey, authCode).catch(() => {});
       setVideos((prev) => prev.filter((v) => v.id !== video.id));
+      setNotice("Video deleted");
+      setTimeout(() => setNotice(null), 2500);
+      api.getStorage().then(setStorage).catch(() => {});
     } catch (e) { alert("Delete failed: " + e.message); }
+  };
+
+  const handleConvert = async (video) => {
+    return requireAuth(async (code) => {
+      try {
+        const job = await api.requestConversion(video.key, code);
+        setConversions((previous) => [job, ...previous.filter((item) => item.id !== job.id)]);
+        setNotice("Conversion queued. Turn on the processor on your mini PC when you are ready.");
+        setTimeout(() => setNotice(null), 4500);
+      } catch (error) {
+        alert("Could not queue conversion: " + error.message);
+      }
+    });
   };
 
   const handleUploadDone = () => {
     setView("library");
+    setNotice("Video uploaded successfully");
+    setTimeout(() => setNotice(null), 3000);
     loadVideos();
   };
 
@@ -609,6 +768,7 @@ export default function CineVault() {
         @keyframes spin{to{transform:rotate(360deg)}}.spin{animation:spin .8s linear infinite;display:inline-block}
         @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.fade{animation:fade .22s ease}
         @keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+        @media(max-width:720px){.status-grid{grid-template-columns:1fr!important}.app-header{height:auto!important;padding:10px 14px!important;flex-wrap:wrap}.app-search{width:130px!important}.app-main{padding:20px 14px!important}}
       `}</style>
 
       {/* PASSCODE MODAL */}
@@ -616,7 +776,7 @@ export default function CineVault() {
 
       {/* HEADER */}
       <header style={{ position:"sticky", top:0, zIndex:50, background:"rgba(9,9,14,.93)", backdropFilter:"blur(18px)", borderBottom:"1px solid rgba(255,255,255,.07)" }}>
-        <div style={{ maxWidth:1300, margin:"0 auto", padding:"0 24px", height:62, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
+        <div className="app-header" style={{ maxWidth:1300, margin:"0 auto", padding:"0 24px", height:62, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
             <div style={{ width:34, height:34, borderRadius:8, background:"linear-gradient(135deg,#F59E0B,#EF4444)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:17 }}>🎬</div>
             <span style={{ fontSize:18, fontWeight:700, letterSpacing:"-.4px" }}>Cine<span style={{ color:"#F59E0B" }}>Vault</span></span>
@@ -636,7 +796,7 @@ export default function CineVault() {
 
           <div style={{ display:"flex", alignItems:"center", gap:12 }}>
             {view === "library" && videos.length > 0 && (
-              <input type="text" placeholder="🔍  Search…" value={search} onChange={(e) => setSearch(e.target.value)}
+              <input className="app-search" type="text" placeholder="🔍  Search…" value={search} onChange={(e) => setSearch(e.target.value)}
                 style={{ background:"rgba(255,255,255,.06)", border:"1px solid rgba(255,255,255,.1)", borderRadius:8, padding:"7px 12px", color:"#E8EAF2", fontSize:13, width:180 }} />
             )}
             {view === "library" && !loading && (
@@ -650,11 +810,16 @@ export default function CineVault() {
         </div>
       </header>
 
-      <main style={{ maxWidth:1300, margin:"0 auto", padding:"32px 24px" }}>
+      <main className="app-main" style={{ maxWidth:1300, margin:"0 auto", padding:"32px 24px" }}>
+
+        {notice && (
+          <div style={{ position:"fixed", top:78, left:"50%", transform:"translateX(-50%)", zIndex:100, background:"#10271F", color:"#6EE7B7", border:"1px solid rgba(16,185,129,.35)", borderRadius:10, padding:"11px 16px", fontSize:13, fontWeight:600, boxShadow:"0 12px 35px rgba(0,0,0,.45)", maxWidth:"calc(100vw - 28px)", textAlign:"center" }}>{notice}</div>
+        )}
 
         {/* LIBRARY */}
         {view === "library" && (
           <div className="fade">
+            <SystemStatus storage={storage} processor={processor} jobs={conversions} />
             {loading && (
               <div style={{ textAlign:"center", padding:"80px 0" }}>
                 <div className="spin" style={{ fontSize:32, marginBottom:16 }}>⚙️</div>
@@ -686,9 +851,11 @@ export default function CineVault() {
                   <VideoCard
                     key={v.id}
                     video={v}
+                    conversion={conversions.find((job) => job.sourceKey === v.key)}
                     onPlay={setPickerVideo}
                     onDelete={(video, showConfirm) => handleDeleteRequest(video, showConfirm)}
                     onConfirmedDelete={handleDelete}
+                    onConvert={handleConvert}
                   />
                 ))}
               </div>
@@ -709,7 +876,7 @@ export default function CineVault() {
               <div style={{ fontSize:16, fontWeight:700, color:"#F5F5F5", marginBottom:6 }}>Upload to Cloudflare R2</div>
               <div style={{ fontSize:13, color:"#6B7280" }}>Videos appear in your library the moment the upload finishes</div>
             </div>
-            <UploadPanel onDone={handleUploadDone} />
+            <UploadPanel onDone={handleUploadDone} passcode={authCode} storage={storage} />
           </div>
         )}
       </main>
