@@ -187,6 +187,7 @@ async function chooseEncoder() {
 }
 
 function encoderArguments(encoder) {
+  if (encoder === "copy") return ["-c:v", "copy"];
   if (encoder === "h264_amf") return ["-c:v", "h264_amf", "-quality", "quality", "-rc", "cqp", "-qp_i", "20", "-qp_p", "22"];
   return ["-c:v", "libx264", "-preset", "medium", "-crf", "21"];
 }
@@ -196,12 +197,14 @@ async function convertMedia(job, inputPath, outputPath) {
   const duration = Number(metadata.format?.duration || 0);
   const textSubtitleCodecs = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"]);
   const subtitleStreams = (metadata.streams || []).filter((stream) => stream.codec_type === "subtitle");
+  const videoStream = (metadata.streams || []).find((stream) => stream.codec_type === "video");
   const supportedSubtitles = subtitleStreams.filter((stream) => textSubtitleCodecs.has(stream.codec_name));
   const skippedSubtitles = subtitleStreams.filter((stream) => !textSubtitleCodecs.has(stream.codec_name));
   const warnings = skippedSubtitles.length
     ? [`Skipped ${skippedSubtitles.length} image-based subtitle track(s) because MP4 cannot contain them. The original MKV is unchanged.`]
     : [];
-  let encoder = await chooseEncoder();
+  let encoder = videoStream?.codec_name === "h264" ? "copy" : await chooseEncoder();
+  if (encoder === "copy") warnings.push("The source was already H.264, so CineVault copied the video without quality loss for a much faster conversion.");
 
   const attempt = async () => {
     const args = ["-y", "-hide_banner", "-i", inputPath, "-map", "0:v:0?", "-map", "0:a?"];
