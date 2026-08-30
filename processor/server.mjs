@@ -49,6 +49,7 @@ let activeUpload = null;
 let working = false;
 let stopRequested = false;
 let lastError = null;
+let cachedJobs = [];
 const logs = [];
 
 function loadEnvironment(path) {
@@ -115,7 +116,8 @@ async function listObjects(prefix) {
 async function getJobs() {
   const objects = await listObjects(jobPrefix);
   const jobs = await Promise.all(objects.map((object) => readJson(object.Key)));
-  return jobs.sort((a, b) => new Date(a.queuedAt || a.createdAt) - new Date(b.queuedAt || b.createdAt));
+  cachedJobs = jobs.sort((a, b) => new Date(a.queuedAt || a.createdAt) - new Date(b.queuedAt || b.createdAt));
+  return cachedJobs;
 }
 
 async function publishStatus() {
@@ -131,12 +133,14 @@ async function publishStatus() {
       lastError,
     });
   } catch (error) {
-    log(`Could not publish heartbeat: ${error.message}`);
+    const message = error.message || error.name || "Could not connect to R2";
+    log(`Could not publish heartbeat: ${message}`);
   }
 }
 
 async function updateJob(job, patch) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
+  cachedJobs = [job, ...cachedJobs.filter((item) => item.id !== job.id)];
   await writeJson(jobObjectKey(job.sourceKey), job);
 }
 
@@ -331,17 +335,22 @@ async function processJob(job) {
 async function processQueue() {
   if (state !== "running" || working) return;
   working = true;
+  let processedJob = false;
   try {
     const jobs = await getJobs();
+    lastError = null;
     const next = jobs.find((job) => job.status === "queued");
-    if (next && state === "running") await processJob(next);
+    if (next && state === "running") {
+      processedJob = true;
+      await processJob(next);
+    }
   } catch (error) {
-    lastError = error.message;
-    log(`Queue check failed: ${error.message}`);
+    lastError = error.message || error.name || "Could not connect to R2";
+    log(`Queue check failed: ${lastError}`);
   } finally {
     working = false;
   }
-  if (state === "running") setTimeout(processQueue, 1000);
+  if (state === "running") setTimeout(processQueue, processedJob ? 1000 : pollMilliseconds);
 }
 
 function sendJson(res, value, statusCode = 200) {
@@ -349,10 +358,8 @@ function sendJson(res, value, statusCode = 200) {
   res.end(JSON.stringify(value));
 }
 
-async function localStatus() {
-  let jobs = [];
-  try { jobs = await getJobs(); } catch (error) { lastError = error.message; }
-  return { state, currentJob, jobs, logs, lastError };
+function localStatus() {
+  return { state, currentJob, jobs: cachedJobs, logs, lastError };
 }
 
 const server = createServer(async (req, res) => {
@@ -361,19 +368,19 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       return res.end(controlPage);
     }
-    if (req.method === "GET" && req.url === "/status") return sendJson(res, await localStatus());
+    if (req.method === "GET" && req.url === "/status") return sendJson(res, localStatus());
     if (req.method === "POST" && req.url === "/start") {
       state = "running";
       stopRequested = false;
       log("Processor started");
-      await publishStatus();
+      publishStatus();
       processQueue();
       return sendJson(res, { ok: true, state });
     }
     if (req.method === "POST" && req.url === "/pause") {
       state = "paused";
       log(currentJob ? "Paused after the current conversion" : "Processor paused");
-      await publishStatus();
+      publishStatus();
       return sendJson(res, { ok: true, state });
     }
     if (req.method === "POST" && req.url === "/stop") {
@@ -382,7 +389,7 @@ const server = createServer(async (req, res) => {
       if (activeChild) activeChild.kill("SIGTERM");
       if (activeUpload) activeUpload.abort();
       log(currentJob ? "Stopping the current conversion" : "Processor turned off");
-      await publishStatus();
+      publishStatus();
       return sendJson(res, { ok: true, state });
     }
     sendJson(res, { error: "Not found" }, 404);
@@ -398,14 +405,14 @@ const controlPage = `<!doctype html>
 <div class="card"><div class="controls"><button class="start" onclick="action('start')">▶ Start</button><button class="pause" onclick="action('pause')">Ⅱ Pause</button><button class="stop" onclick="action('stop')">■ Stop</button></div><div id="current" class="muted" style="margin-top:16px">No active conversion</div><div class="bar"><div id="progress" class="fill" style="width:0%"></div></div></div>
 <div class="card"><b>Conversion queue</b><div style="overflow:auto;margin-top:10px"><table><thead><tr><th>File</th><th>Status</th><th>Progress</th></tr></thead><tbody id="jobs"></tbody></table></div></div>
 <div class="card"><b>Activity</b><pre id="logs" style="margin-top:12px">Loading…</pre></div></div>
-<script>async function action(name){await fetch('/'+name,{method:'POST'});await refresh()}function esc(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}async function refresh(){try{const s=await fetch('/status').then(r=>r.json());document.getElementById('state').textContent=s.state.toUpperCase();const c=s.currentJob;document.getElementById('current').textContent=c?'Converting: '+c.sourceKey+' — '+Math.round(c.progress||0)+'%':(s.lastError?'Last error: '+s.lastError:'No active conversion');document.getElementById('progress').style.width=(c?.progress||0)+'%';document.getElementById('jobs').innerHTML=(s.jobs||[]).map(j=>'<tr><td>'+esc(j.sourceKey)+'</td><td>'+esc(j.status)+'</td><td>'+Math.round(j.progress||0)+'%</td></tr>').join('')||'<tr><td colspan="3" class="muted">No conversion jobs yet</td></tr>';document.getElementById('logs').textContent=(s.logs||[]).join('\n')||'No activity yet'}catch(e){document.getElementById('logs').textContent=e.message}}refresh();setInterval(refresh,3000)</script></body></html>`;
+<script>async function action(name){const badge=document.getElementById('state');badge.textContent=name==='start'?'RUNNING':name==='pause'?'PAUSED':'OFF';try{const response=await fetch('/'+name,{method:'POST'});if(!response.ok)throw new Error((await response.json()).error||'Control request failed');await refresh()}catch(error){document.getElementById('logs').textContent='Control error: '+error.message}}function esc(v){return String(v||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}async function refresh(){try{const s=await fetch('/status').then(r=>r.json());document.getElementById('state').textContent=s.state.toUpperCase();const c=s.currentJob;document.getElementById('current').textContent=c?'Converting: '+c.sourceKey+' — '+Math.round(c.progress||0)+'%':(s.lastError?'Last error: '+s.lastError:'No active conversion');document.getElementById('progress').style.width=(c?.progress||0)+'%';document.getElementById('jobs').innerHTML=(s.jobs||[]).map(j=>'<tr><td>'+esc(j.sourceKey)+'</td><td>'+esc(j.status)+'</td><td>'+Math.round(j.progress||0)+'%</td></tr>').join('')||'<tr><td colspan="3" class="muted">No conversion jobs yet</td></tr>';document.getElementById('logs').textContent=(s.logs||[]).join('\n')||'No activity yet'}catch(e){document.getElementById('logs').textContent=e.message}}refresh();setInterval(refresh,3000)</script></body></html>`;
 
-server.listen(port, "127.0.0.1", async () => {
+server.listen(port, "127.0.0.1", () => {
   log(`Control page: http://127.0.0.1:${port}`);
   log("Processor is OFF. Click Start in the control page when you want to use this PC.");
-  await publishStatus();
+  publishStatus();
+  getJobs().catch((error) => { lastError = error.message || "Could not connect to R2"; log(`Initial R2 connection failed: ${lastError}`); });
   setInterval(publishStatus, 15000);
-  setInterval(processQueue, pollMilliseconds);
   if (process.platform === "win32") spawn("cmd", ["/c", "start", "", `http://127.0.0.1:${port}`], { windowsHide: true, detached: true });
 });
 
